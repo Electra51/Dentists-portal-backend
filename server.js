@@ -3,9 +3,9 @@ import colors from "colors";
 import dotenv from "dotenv";
 import morgan from "morgan";
 import authRoutes from "./routes/authRoute.js";
+import doctorRoutes from "./routes/doctorRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
-import tagRoutes from "./routes/tagRoutes.js";
-import postRoutes from "./routes/postRoutes.js";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import { v2 as cloudinary } from "cloudinary";
@@ -30,9 +30,9 @@ app.use(express.static("public"));
 app.use(morgan("dev"));
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/auth/doctor", doctorRoutes); // নতুন
+app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/category", categoryRoutes);
-app.use("/api/v1/tag", tagRoutes);
-app.use("/api/v1/post", postRoutes);
 
 app.get("/", (req, res) => {
   res.send("<h1>Welcome to Dentists portal backend</h1>");
