@@ -1,123 +1,6 @@
 // controllers/adminController.js
 import userModel from "../models/userModel.js";
 
-// Get pending verification requests
-export const getPendingDoctorsController = async (req, res) => {
-  try {
-    const pendingDoctors = await userModel
-      .find({
-        role: 1,
-        verificationStatus: "pending",
-      })
-      .select("-password")
-      .sort({ verificationRequestDate: -1 });
-
-    res.status(200).send({
-      success: true,
-      count: pendingDoctors.length,
-      data: pendingDoctors,
-    });
-  } catch (error) {
-    console.error("Error in getPendingDoctorsController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
-  }
-};
-
-// Approve doctor
-export const approveDoctorController = async (req, res) => {
-  try {
-    const { doctorId } = req.params;
-    const adminId = req.user._id;
-
-    const doctor = await userModel.findById(doctorId);
-
-    if (!doctor || doctor.role !== 1) {
-      return res.status(404).send({
-        success: false,
-        message: "Doctor not found",
-      });
-    }
-
-    if (doctor.verificationStatus === "approved") {
-      return res.status(400).send({
-        success: false,
-        message: "Doctor is already verified",
-      });
-    }
-
-    // Update verification status
-    doctor.verificationStatus = "approved";
-    doctor.verifiedBy = adminId;
-    doctor.verifiedAt = new Date();
-    doctor.rejectionReason = "";
-    await doctor.save();
-
-    const approvedDoctor = await userModel
-      .findById(doctorId)
-      .select("-password");
-
-    res.status(200).send({
-      success: true,
-      message: "Doctor approved successfully",
-      data: approvedDoctor,
-    });
-  } catch (error) {
-    console.error("Error in approveDoctorController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Failed to approve doctor",
-      error: error.message,
-    });
-  }
-};
-
-// Reject doctor
-export const rejectDoctorController = async (req, res) => {
-  try {
-    const { doctorId } = req.params;
-    const { reason } = req.body;
-
-    const doctor = await userModel.findById(doctorId);
-
-    if (!doctor || doctor.role !== 1) {
-      return res.status(404).send({
-        success: false,
-        message: "Doctor not found",
-      });
-    }
-
-    // Update verification status
-    doctor.verificationStatus = "rejected";
-    doctor.rejectionReason =
-      reason ||
-      "Credentials not verified. Please update your information and resubmit.";
-    doctor.verifiedAt = null;
-    doctor.verifiedBy = null;
-    await doctor.save();
-
-    const rejectedDoctor = await userModel
-      .findById(doctorId)
-      .select("-password");
-
-    res.status(200).send({
-      success: true,
-      message: "Doctor verification rejected",
-      data: rejectedDoctor,
-    });
-  } catch (error) {
-    console.error("Error in rejectDoctorController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Failed to reject doctor",
-      error: error.message,
-    });
-  }
-};
-
 // Get all doctors with filter
 export const getAllDoctorsController = async (req, res) => {
   try {
@@ -149,31 +32,161 @@ export const getAllDoctorsController = async (req, res) => {
   }
 };
 
-// Get dashboard stats
-export const getDashboardStatsController = async (req, res) => {
+// Get all patients with filter and search
+export const getAllPatientsController = async (req, res) => {
   try {
-    const totalDoctors = await userModel.countDocuments({ role: 1 });
-    const verifiedDoctors = await userModel.countDocuments({
-      role: 1,
-      verificationStatus: "approved",
+    const { search, bloodGroup, sortBy = "createdAt" } = req.query;
+
+    let query = { role: 0 }; // Only patients
+
+    // Search by name or email
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Filter by blood group
+    if (bloodGroup && bloodGroup !== "all") {
+      query.bloodGroup = bloodGroup;
+    }
+
+    // Sort options
+    let sortOptions = {};
+    if (sortBy === "name") {
+      sortOptions = { name: 1 };
+    } else if (sortBy === "oldest") {
+      sortOptions = { createdAt: 1 };
+    } else {
+      sortOptions = { createdAt: -1 }; // Default: newest first
+    }
+
+    const patients = await userModel
+      .find(query)
+      .select("-password")
+      .sort(sortOptions);
+
+    res.status(200).send({
+      success: true,
+      count: patients.length,
+      data: patients,
     });
-    const pendingDoctors = await userModel.countDocuments({
-      role: 1,
-      verificationStatus: "pending",
+  } catch (error) {
+    console.error("Error in getAllPatientsController:", error);
+    res.status(500).send({
+      success: false,
+      message: "Server error",
+      error: error.message,
     });
+  }
+};
+
+// Get single patient details
+export const getPatientDetailsController = async (req, res) => {
+  try {
+    const { patientId } = req.params;
+
+    const patient = await userModel
+      .findOne({ _id: patientId, role: 0 })
+      .select("-password");
+
+    if (!patient) {
+      return res.status(404).send({
+        success: false,
+        message: "Patient not found",
+      });
+    }
+
+    // You can add appointment history, medical records here
+    // const appointments = await appointmentModel.find({ patientId });
+
+    res.status(200).send({
+      success: true,
+      data: patient,
+      // appointments, // If you have appointments
+    });
+  } catch (error) {
+    console.error("Error in getPatientDetailsController:", error);
+    res.status(500).send({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// Delete patient (soft delete by marking inactive)
+export const deletePatientController = async (req, res) => {
+  try {
+    const { patientId } = req.params;
+
+    const patient = await userModel.findOne({ _id: patientId, role: 0 });
+
+    if (!patient) {
+      return res.status(404).send({
+        success: false,
+        message: "Patient not found",
+      });
+    }
+
+    // Soft delete - mark as inactive
+    patient.isActive = false;
+    await patient.save();
+
+    res.status(200).send({
+      success: true,
+      message: "Patient deactivated successfully",
+    });
+  } catch (error) {
+    console.error("Error in deletePatientController:", error);
+    res.status(500).send({
+      success: false,
+      message: "Failed to delete patient",
+      error: error.message,
+    });
+  }
+};
+
+// Get patient statistics
+export const getPatientStatsController = async (req, res) => {
+  try {
     const totalPatients = await userModel.countDocuments({ role: 0 });
+    const activePatients = await userModel.countDocuments({
+      role: 0,
+      isActive: true,
+    });
+
+    // Patients by blood group
+    const bloodGroupStats = await userModel.aggregate([
+      { $match: { role: 0, bloodGroup: { $ne: "" } } },
+      { $group: { _id: "$bloodGroup", count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // New patients this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const newPatientsThisMonth = await userModel.countDocuments({
+      role: 0,
+      createdAt: { $gte: startOfMonth },
+    });
 
     res.status(200).send({
       success: true,
       stats: {
-        totalDoctors,
-        verifiedDoctors,
-        pendingDoctors,
         totalPatients,
+        activePatients,
+        inactivePatients: totalPatients - activePatients,
+        newPatientsThisMonth,
+        bloodGroupStats,
       },
     });
   } catch (error) {
-    console.error("Error in getDashboardStatsController:", error);
+    console.error("Error in getPatientStatsController:", error);
     res.status(500).send({
       success: false,
       message: "Server error",

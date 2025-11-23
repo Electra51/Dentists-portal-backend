@@ -1,43 +1,30 @@
-// routes/adminRoutes.js (নতুন)
 import express from "express";
 import {
-  getPendingDoctorsController,
-  approveDoctorController,
-  rejectDoctorController,
   getAllDoctorsController,
-  getDashboardStatsController,
+  getAllPatientsController,
+  getPatientDetailsController,
+  deletePatientController,
+  getPatientStatsController,
 } from "../controllers/adminController.js";
 import { requireSignIn, isAdmin } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
-// Admin dashboard
-router.get(
-  "/dashboard-stats",
-  requireSignIn,
-  isAdmin,
-  getDashboardStatsController
-);
-
-// Doctor management
-router.get(
-  "/pending-doctors",
-  requireSignIn,
-  isAdmin,
-  getPendingDoctorsController
-);
 router.get("/doctors", requireSignIn, isAdmin, getAllDoctorsController);
-router.put(
-  "/approve-doctor/:doctorId",
+
+router.get("/patients", requireSignIn, isAdmin, getAllPatientsController);
+router.get(
+  "/patient/:patientId",
   requireSignIn,
   isAdmin,
-  approveDoctorController
+  getPatientDetailsController
 );
-router.put(
-  "/reject-doctor/:doctorId",
+router.delete(
+  "/patient/:patientId",
   requireSignIn,
   isAdmin,
-  rejectDoctorController
+  deletePatientController
 );
+router.get("/patient-stats", requireSignIn, isAdmin, getPatientStatsController);
 
 export default router;

@@ -30,7 +30,7 @@ app.use(express.static("public"));
 app.use(morgan("dev"));
 
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/auth/doctor", doctorRoutes); // নতুন
+app.use("/api/v1/doctor", doctorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/category", categoryRoutes);
 
