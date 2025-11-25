@@ -1,107 +1,31 @@
-// models/prescriptionModel.js
 import mongoose from "mongoose";
-
-const medicineSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-  },
-  type: {
-    type: String,
-    enum: [
-      "Tablet",
-      "Capsule",
-      "Syrup",
-      "Injection",
-      "Ointment",
-      "Drops",
-      "Other",
-    ],
-    default: "Tablet",
-  },
-  dosage: {
-    type: String, // "500mg", "10ml"
-    required: true,
-  },
-  frequency: {
-    type: String, // "1+0+1", "1+1+1", "0+0+1"
-    required: true,
-  },
-  timing: {
-    type: String,
-    enum: [
-      "Before meal",
-      "After meal",
-      "With meal",
-      "Empty stomach",
-      "As needed",
-    ],
-    default: "After meal",
-  },
-  duration: {
-    type: String, // "7 days", "2 weeks", "1 month"
-    required: true,
-  },
-  instructions: {
-    type: String,
-    default: "",
-  },
-});
-
-const testSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-  },
-  description: {
-    type: String,
-    default: "",
-  },
-  urgency: {
-    type: String,
-    enum: ["Normal", "Urgent", "Very Urgent"],
-    default: "Normal",
-  },
-  instructions: {
-    type: String,
-    default: "",
-  },
-});
 
 const prescriptionSchema = new mongoose.Schema(
   {
-    // Prescription Number (auto-generated)
-    prescriptionNumber: {
+    // ✅ Prescription ID - Unique identifier
+    prescriptionId: {
       type: String,
       unique: true,
     },
 
-    // Patient Information
+    // ✅ Patient Information
     patientId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "users",
       required: true,
+      index: true,
     },
     patientName: {
       type: String,
       required: true,
     },
-    patientAge: {
-      type: Number,
-    },
-    patientGender: {
-      type: String,
-      enum: ["Male", "Female", "Other"],
-    },
-    patientBloodGroup: {
-      type: String,
-    },
 
-    // Doctor Information
+    // ✅ Doctor Information
     doctorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "users",
       required: true,
+      index: true,
     },
     doctorName: {
       type: String,
@@ -109,107 +33,114 @@ const prescriptionSchema = new mongoose.Schema(
     },
     doctorSpecialization: {
       type: String,
-    },
-    doctorBMDC: {
-      type: String,
+      default: "",
     },
 
-    // Appointment Reference
+    // ✅ Appointment Reference
     appointmentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "appointments",
-      default: null,
-    },
-
-    // Medical Details
-    chiefComplaints: {
-      type: String, // Main problem/symptoms
-      default: "",
-    },
-    diagnosis: {
-      type: String,
       required: true,
-    },
-    vitalSigns: {
-      bloodPressure: { type: String, default: "" },
-      temperature: { type: String, default: "" },
-      pulse: { type: String, default: "" },
-      weight: { type: String, default: "" },
-      height: { type: String, default: "" },
+      index: true,
     },
 
-    // Medicines
-    medicines: [medicineSchema],
+    // ✅ Medicines List
+    medicines: [
+      {
+        medicineName: {
+          type: String,
+          required: true,
+        },
+        dosage: {
+          type: String,
+          required: true,
+        },
+        frequency: {
+          type: String,
+          required: true,
+        },
+        duration: {
+          type: String,
+          required: true,
+        },
+        instructions: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
 
-    // Tests/Investigations
-    tests: [testSchema],
-
-    // Advice/Instructions
-    advice: {
+    // ✅ General Instructions
+    generalInstructions: {
       type: String,
       default: "",
-    },
-    dietaryInstructions: {
-      type: String,
-      default: "",
-    },
-    lifestyleAdvice: {
-      type: String,
-      default: "",
+      maxlength: 1000,
     },
 
-    // Follow-up
+    // ✅ Next Visit Date
     nextVisit: {
       type: Date,
       default: null,
     },
-    followUpInstructions: {
-      type: String,
-      default: "",
-    },
 
-    // Status
+    // ✅ Status
     status: {
       type: String,
       enum: ["active", "completed", "cancelled"],
       default: "active",
     },
 
-    // Notes
-    doctorNotes: {
-      type: String, // Private notes (not shown to patient)
+    // ✅ Diagnosis (Optional - can be added later)
+    diagnosis: {
+      type: String,
       default: "",
+      maxlength: 500,
     },
 
-    // Digital Signature
-    isDigitallySigned: {
-      type: Boolean,
-      default: true,
-    },
-    signedAt: {
-      type: Date,
-      default: Date.now,
-    },
+    // ✅ Audit Trail
+    auditLog: [
+      {
+        action: {
+          type: String,
+          required: true,
+        },
+        performedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "users",
+          required: true,
+        },
+        performedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        note: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
 );
 
-// Auto-generate prescription number
+// ✅ Pre-save hook to generate prescriptionId
 prescriptionSchema.pre("save", async function (next) {
-  if (!this.prescriptionNumber) {
-    const count = await mongoose.model("prescriptions").countDocuments();
+  if (this.isNew && !this.prescriptionId) {
     const year = new Date().getFullYear();
-    this.prescriptionNumber = `RX-${year}-${String(count + 1).padStart(
-      6,
-      "0"
-    )}`;
+    const count = await mongoose.model("prescriptions").countDocuments();
+    this.prescriptionId = `PRX-${year}-${String(count + 1).padStart(6, "0")}`;
   }
   next();
 });
 
-// Index for faster queries
+// ✅ Indexes for faster queries
 prescriptionSchema.index({ patientId: 1, createdAt: -1 });
 prescriptionSchema.index({ doctorId: 1, createdAt: -1 });
-prescriptionSchema.index({ prescriptionNumber: 1 });
+prescriptionSchema.index({ appointmentId: 1 });
+prescriptionSchema.index({ prescriptionId: 1 });
 
 export default mongoose.model("prescriptions", prescriptionSchema);
