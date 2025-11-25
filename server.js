@@ -5,7 +5,7 @@ import morgan from "morgan";
 import authRoutes from "./routes/authRoute.js";
 import doctorRoutes from "./routes/doctorRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
-import categoryRoutes from "./routes/categoryRoutes.js";
+import appointmentRoutes from "./routes/appointmentRoutes.js";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import { v2 as cloudinary } from "cloudinary";
@@ -31,8 +31,8 @@ app.use(morgan("dev"));
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/doctor", doctorRoutes);
+app.use("/api/v1/appointments", appointmentRoutes);
 app.use("/api/v1/admin", adminRoutes);
-app.use("/api/v1/category", categoryRoutes);
 
 app.get("/", (req, res) => {
   res.send("<h1>Welcome to Dentists portal backend</h1>");
