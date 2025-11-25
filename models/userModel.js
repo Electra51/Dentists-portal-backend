@@ -85,11 +85,43 @@ const userSchema = new mongoose.Schema(
       default: "",
     },
     schedule: {
-      type: String,
-      default: "",
+      type: Object,
+      default: {},
     },
 
     // ========== VERIFICATION FIELDS (for Dentist) ==========
+    category: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    services: {
+      type: [String], // Array of strings
+      default: [],
+    },
+    bio: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: [1000, "Bio cannot exceed 1000 characters"],
+    },
+    settings: {
+      type: Object,
+      default: {
+        consultationFee: "500",
+        appointmentDuration: "30",
+      },
+    },
+    notifications: {
+      type: Object,
+      default: {
+        email: true,
+        sms: false,
+        appointmentReminders: true,
+        cancellationAlerts: true,
+        newPatientAlerts: true,
+      },
+    },
     verificationStatus: {
       type: String,
       enum: ["not_requested", "pending", "approved", "rejected"],

@@ -95,7 +95,8 @@ export const loginController = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
-
+    user.lastLogin = new Date();
+    await user.save();
     res.status(200).send({
       success: true,
       message: "Login successful",
@@ -104,6 +105,7 @@ export const loginController = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        lastLogin: user.lastLogin,
       },
       token,
     });
