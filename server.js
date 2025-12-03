@@ -7,6 +7,8 @@ import doctorRoutes from "./routes/doctorRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import appointmentRoutes from "./routes/appointmentRoutes.js";
 import prescriptionRoutes from "./routes/prescriptionRoutes.js";
+import dashboardRoute from "./routes/dashboardRoute.js";
+import reviewRoutes from "./routes/reviewRoutes.js";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import { v2 as cloudinary } from "cloudinary";
@@ -34,7 +36,9 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/doctor", doctorRoutes);
 app.use("/api/v1/appointments", appointmentRoutes);
 app.use("/api/v1/prescription", prescriptionRoutes);
+app.use("/api/v1/dashboard", dashboardRoute);
 app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/review", reviewRoutes);
 
 app.get("/", (req, res) => {
   res.send("<h1>Welcome to Dentists portal backend</h1>");

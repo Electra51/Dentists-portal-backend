@@ -1,15 +1,14 @@
-// models/appointmentModel.js
 import mongoose from "mongoose";
 
 const appointmentSchema = new mongoose.Schema(
   {
-    // ✅ Booking ID - Unique identifier for appointment
+    // unique identifier for appointment
     bookingId: {
       type: String,
       unique: true,
     },
 
-    // Patient Information
+    // patient info
     patientId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "users",
@@ -28,9 +27,13 @@ const appointmentSchema = new mongoose.Schema(
         type: String,
         required: true,
       },
+      profileImage: {
+        type: String,
+        default: "",
+      },
     },
 
-    // Doctor Information
+    // dentist info
     doctorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "users",
@@ -45,7 +48,7 @@ const appointmentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // Appointment Details
+    // appointment
     appointmentDate: {
       type: Date,
       required: true,
@@ -73,11 +76,23 @@ const appointmentSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-
+    prescription: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "prescriptions",
+      default: null,
+    },
     // Status
     status: {
       type: String,
-      enum: ["scheduled", "confirmed", "completed", "cancelled", "no-show"],
+      enum: [
+        "scheduled",
+        "confirmed",
+        "completed",
+        "cancelled",
+        "no-show",
+        "follow-up",
+        "archived",
+      ],
       default: "scheduled",
     },
 
@@ -141,7 +156,7 @@ const appointmentSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "online", "card"],
+        enum: ["cash", "bkash", "card"],
         default: "cash",
       },
 
@@ -263,17 +278,6 @@ appointmentSchema.pre("save", async function (next) {
   next();
 });
 
-// ✅ Virtual for appointment status display
-appointmentSchema.virtual("displayStatus").get(function () {
-  if (this.status === "completed" && this.payment.paymentStatus === "paid") {
-    return "Completed & Paid";
-  }
-  if (this.status === "completed" && this.payment.paymentStatus === "pending") {
-    return "Completed - Payment Pending";
-  }
-  return this.status.charAt(0).toUpperCase() + this.status.slice(1);
-});
-
 // ✅ Method to mark payment as received
 appointmentSchema.methods.markAsPaid = function (userId, amount, note = "") {
   this.payment.paymentStatus = "paid";
@@ -286,7 +290,7 @@ appointmentSchema.methods.markAsPaid = function (userId, amount, note = "") {
   this.auditLog.push({
     action: "paid",
     performedBy: userId,
-    note: `Cash payment received: ৳${amount}`,
+    note: `Cash payment received: ${amount}`,
   });
 
   return this.save();

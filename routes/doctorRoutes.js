@@ -1,20 +1,6 @@
-// import express from "express";
-// import { updateDoctorProfileController } from "../controllers/doctorController.js";
-// import { requireSignIn, isDoctor } from "../middlewares/authMiddleware.js";
-
-// const router = express.Router();
-
-// router.put("/profile", requireSignIn, isDoctor, updateDoctorProfileController);
-
-// export default router;
-
-// routes/doctorRoutes.js
 import express from "express";
 import {
   getDoctorDashboardController,
-  getDoctorAppointmentsController,
-  getAppointmentDetailsController,
-  updateAppointmentStatusController,
   getDoctorPatientsController,
   getPatientDetailsByDoctorController,
   getDoctorPrescriptionsController,
@@ -31,31 +17,39 @@ import {
   getDentistDetailsController,
 } from "../controllers/doctorController.js";
 import { requireSignIn, isDoctor } from "../middlewares/authMiddleware.js";
+import {
+  getMyEarningsDashboard,
+  getMyEarningsHistory,
+  getMyMonthlyTrend,
+  getPendingPayments,
+} from "../controllers/doctorEarningsController.js";
+import { markPaymentReceived } from "../controllers/appointmentController.js";
 
 const router = express.Router();
 
+// ✅ Doctor Earnings Routes
+router.get(
+  "/earnings/dashboard",
+  requireSignIn,
+  isDoctor,
+  getMyEarningsDashboard
+);
+router.get("/earnings/history", requireSignIn, isDoctor, getMyEarningsHistory);
+router.get(
+  "/earnings/monthly-trend",
+  requireSignIn,
+  isDoctor,
+  getMyMonthlyTrend
+);
+router.get("/earnings/pending", requireSignIn, isDoctor, getPendingPayments);
+router.patch(
+  "/earnings/mark-paid/:appointmentId",
+  isDoctor,
+  markPaymentReceived
+);
+
 // ==================== DASHBOARD ====================
 router.get("/dashboard", requireSignIn, isDoctor, getDoctorDashboardController);
-
-// ==================== APPOINTMENTS ====================
-router.get(
-  "/appointments",
-  requireSignIn,
-  isDoctor,
-  getDoctorAppointmentsController
-);
-router.get(
-  "/appointment/:appointmentId",
-  requireSignIn,
-  isDoctor,
-  getAppointmentDetailsController
-);
-router.put(
-  "/appointment/:appointmentId/status",
-  requireSignIn,
-  isDoctor,
-  updateAppointmentStatusController
-);
 
 // ==================== PATIENTS ====================
 router.get("/patients", requireSignIn, isDoctor, getDoctorPatientsController);

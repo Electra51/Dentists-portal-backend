@@ -97,18 +97,112 @@ export const getDoctorDashboardController = async (req, res) => {
 
 // ==================== PUBLIC ROUTES ====================
 // Get all verified dentists for public view
+// export const getAllVerifiedDentistsController = async (req, res) => {
+//   try {
+//     const { search, specialization, department, sortBy } = req.query;
+
+//     let query = {
+//       role: 1,
+//       verificationStatus: "approved",
+//     };
+
+//     // Filter by specialization
+//     if (specialization && specialization !== "all") {
+//       query.specialization = specialization;
+//     }
+
+//     // Filter by department
+//     if (department && department !== "all") {
+//       query.department = department;
+//     }
+
+//     let dentists = await userModel
+//       .find(query)
+//       .select(
+//         "-password -googleId -emergencyContact -allergies -chronicConditions -currentMedications"
+//       );
+
+//     // Search by name, specialization, department
+//     if (search) {
+//       dentists = dentists.filter(
+//         (dentist) =>
+//           dentist.name?.toLowerCase().includes(search.toLowerCase()) ||
+//           dentist.specialization
+//             ?.toLowerCase()
+//             .includes(search.toLowerCase()) ||
+//           dentist.department?.toLowerCase().includes(search.toLowerCase())
+//       );
+//     }
+
+//     // Add review statistics for each dentist
+//     const dentistsWithStats = await Promise.all(
+//       dentists.map(async (dentist) => {
+//         const reviews = await reviewModel.find({ doctorId: dentist._id });
+//         const avgRating =
+//           reviews.length > 0
+//             ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
+//             : 0;
+
+//         const totalPatients = await appointmentModel.distinct("patientId", {
+//           doctorId: dentist._id,
+//         });
+
+//         return {
+//           ...dentist.toObject(),
+//           avgRating: avgRating.toFixed(1),
+//           totalReviews: reviews.length,
+//           totalPatients: totalPatients.length,
+//         };
+//       })
+//     );
+
+//     // Sort dentists
+//     if (sortBy === "rating") {
+//       dentistsWithStats.sort((a, b) => b.avgRating - a.avgRating);
+//     } else if (sortBy === "experience") {
+//       dentistsWithStats.sort(
+//         (a, b) => parseInt(b.experience) - parseInt(a.experience)
+//       );
+//     } else if (sortBy === "reviews") {
+//       dentistsWithStats.sort((a, b) => b.totalReviews - a.totalReviews);
+//     }
+
+//     res.status(200).send({
+//       success: true,
+//       count: dentistsWithStats.length,
+//       data: dentistsWithStats,
+//     });
+//   } catch (error) {
+//     console.error("Error in getAllVerifiedDentistsController:", error);
+//     res.status(500).send({
+//       success: false,
+//       message: "Server error",
+//       error: error.message,
+//     });
+//   }
+// };
 export const getAllVerifiedDentistsController = async (req, res) => {
   try {
-    const { search, specialization, department, sortBy } = req.query;
+    const { search, specialization, department, sortBy = "rating" } = req.query;
 
+    // Base query
     let query = {
       role: 1,
       verificationStatus: "approved",
     };
 
+    // Search by name (database query তে করুন)
+    if (search && search.trim() !== "") {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { specialization: { $regex: search, $options: "i" } },
+        { department: { $regex: search, $options: "i" } },
+      ];
+    }
+
     // Filter by specialization
     if (specialization && specialization !== "all") {
-      query.specialization = specialization;
+      query.specialization = { $regex: specialization, $options: "i" };
     }
 
     // Filter by department
@@ -116,42 +210,55 @@ export const getAllVerifiedDentistsController = async (req, res) => {
       query.department = department;
     }
 
+    console.log("Query:", JSON.stringify(query, null, 2)); // Debug
+
+    // Fetch dentists
     let dentists = await userModel
       .find(query)
       .select(
         "-password -googleId -emergencyContact -allergies -chronicConditions -currentMedications"
-      );
+      )
+      .lean(); // .lean() use করুন performance এর জন্য
 
-    // Search by name, specialization, department
-    if (search) {
-      dentists = dentists.filter(
-        (dentist) =>
-          dentist.name?.toLowerCase().includes(search.toLowerCase()) ||
-          dentist.specialization
-            ?.toLowerCase()
-            .includes(search.toLowerCase()) ||
-          dentist.department?.toLowerCase().includes(search.toLowerCase())
-      );
+    console.log("Found dentists:", dentists.length); // Debug
+
+    if (dentists.length === 0) {
+      return res.status(200).send({
+        success: true,
+        count: 0,
+        data: [],
+        message: "No verified dentists found",
+      });
     }
 
-    // Add review statistics for each dentist
+    // Add review statistics
     const dentistsWithStats = await Promise.all(
       dentists.map(async (dentist) => {
-        const reviews = await reviewModel.find({ doctorId: dentist._id });
+        const reviews = await reviewModel
+          .find({
+            doctor: dentist._id, // ✅ doctorId → doctor
+            status: "approved", // ✅ শুধু approved reviews
+          })
+          .populate("patient", "name profileImage") // ✅ patientId → patient
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .lean();
+
         const avgRating =
           reviews.length > 0
             ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
             : 0;
 
         const totalPatients = await appointmentModel.distinct("patientId", {
-          doctorId: dentist._id,
+          doctorId: dentist._id, // appointment model এ যদি doctorId থাকে
         });
 
         return {
-          ...dentist.toObject(),
-          avgRating: avgRating.toFixed(1),
+          ...dentist,
+          avgRating: parseFloat(avgRating.toFixed(1)),
           totalReviews: reviews.length,
           totalPatients: totalPatients.length,
+          reviews,
         };
       })
     );
@@ -160,9 +267,11 @@ export const getAllVerifiedDentistsController = async (req, res) => {
     if (sortBy === "rating") {
       dentistsWithStats.sort((a, b) => b.avgRating - a.avgRating);
     } else if (sortBy === "experience") {
-      dentistsWithStats.sort(
-        (a, b) => parseInt(b.experience) - parseInt(a.experience)
-      );
+      dentistsWithStats.sort((a, b) => {
+        const expA = parseInt(a.experience) || 0;
+        const expB = parseInt(b.experience) || 0;
+        return expB - expA;
+      });
     } else if (sortBy === "reviews") {
       dentistsWithStats.sort((a, b) => b.totalReviews - a.totalReviews);
     }
@@ -181,7 +290,6 @@ export const getAllVerifiedDentistsController = async (req, res) => {
     });
   }
 };
-
 // Get single dentist details for public view
 export const getDentistDetailsController = async (req, res) => {
   try {
@@ -199,9 +307,20 @@ export const getDentistDetailsController = async (req, res) => {
     }
 
     // Get reviews
+    // const reviews = await reviewModel
+    //   .find({ doctorId: dentistId })
+    //   .populate("patientId", "name profileImage")
+    //   .sort({ createdAt: -1 })
+    //   .limit(10);
+
+    // ✅ Correct - "doctor" field দিয়ে query করুন
+    // Get reviews
     const reviews = await reviewModel
-      .find({ doctorId: dentistId })
-      .populate("patientId", "name profileImage")
+      .find({
+        doctor: dentistId, // ✅ doctorId → doctor
+        status: "approved", // ✅ শুধু approved reviews
+      })
+      .populate("patient", "name profileImage") // ✅ patientId → patient
       .sort({ createdAt: -1 })
       .limit(10);
 
@@ -221,7 +340,7 @@ export const getDentistDetailsController = async (req, res) => {
 
     // Get total patients
     const totalPatients = await appointmentModel.distinct("patientId", {
-      doctorId: dentistId,
+      doctorId: dentistId, // appointment model check করুন
     });
 
     // Get available slots for next 7 days
@@ -244,126 +363,6 @@ export const getDentistDetailsController = async (req, res) => {
     res.status(500).send({
       success: false,
       message: "Server error",
-      error: error.message,
-    });
-  }
-};
-
-// ==================== APPOINTMENTS ====================
-// Get doctor's all appointments with filters
-export const getDoctorAppointmentsController = async (req, res) => {
-  try {
-    const doctorId = req.user._id;
-    const { date, status, search } = req.query;
-
-    let query = { doctorId };
-
-    // Filter by date
-    if (date) {
-      const selectedDate = new Date(date);
-      selectedDate.setHours(0, 0, 0, 0);
-      const nextDay = new Date(selectedDate);
-      nextDay.setDate(nextDay.getDate() + 1);
-
-      query.appointmentDate = { $gte: selectedDate, $lt: nextDay };
-    }
-
-    // Filter by status
-    if (status && status !== "all") {
-      query.status = status; // confirmed, pending, completed, cancelled
-    }
-
-    const appointments = await appointmentModel
-      .find(query)
-      .populate("patientId", "name email phone bloodGroup")
-      .sort({ appointmentDate: -1, appointmentTime: 1 });
-
-    // Search by patient name
-    let filteredAppointments = appointments;
-    if (search) {
-      filteredAppointments = appointments.filter((apt) =>
-        apt.patientId?.name?.toLowerCase().includes(search.toLowerCase())
-      );
-    }
-
-    res.status(200).send({
-      success: true,
-      count: filteredAppointments.length,
-      data: filteredAppointments,
-    });
-  } catch (error) {
-    console.error("Error in getDoctorAppointmentsController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
-  }
-};
-
-// Get single appointment details
-export const getAppointmentDetailsController = async (req, res) => {
-  try {
-    const { appointmentId } = req.params;
-    const doctorId = req.user._id;
-
-    const appointment = await appointmentModel
-      .findOne({ _id: appointmentId, doctorId })
-      .populate("patientId", "name email phone bloodGroup age address");
-
-    if (!appointment) {
-      return res.status(404).send({
-        success: false,
-        message: "Appointment not found",
-      });
-    }
-
-    res.status(200).send({
-      success: true,
-      data: appointment,
-    });
-  } catch (error) {
-    console.error("Error in getAppointmentDetailsController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
-  }
-};
-
-// Update appointment status
-export const updateAppointmentStatusController = async (req, res) => {
-  try {
-    const { appointmentId } = req.params;
-    const { status } = req.body; // confirmed, completed, cancelled
-    const doctorId = req.user._id;
-
-    const appointment = await appointmentModel.findOne({
-      _id: appointmentId,
-      doctorId,
-    });
-
-    if (!appointment) {
-      return res.status(404).send({
-        success: false,
-        message: "Appointment not found",
-      });
-    }
-
-    appointment.status = status;
-    await appointment.save();
-
-    res.status(200).send({
-      success: true,
-      message: "Appointment status updated successfully",
-      data: appointment,
-    });
-  } catch (error) {
-    console.error("Error in updateAppointmentStatusController:", error);
-    res.status(500).send({
-      success: false,
-      message: "Failed to update appointment status",
       error: error.message,
     });
   }

@@ -1,6 +1,6 @@
-// controllers/appointmentController.js
-import Appointment from "../models/appointmentModel.js";
-import User from "../models/userModel.js";
+import appointmentModel from "../models/appointmentModel.js";
+import prescriptionModel from "../models/prescriptionModel.js";
+import userModel from "../models/userModel.js";
 
 // ============================================
 // Helper: Check Profile Completion
@@ -24,7 +24,7 @@ const isProfileComplete = (user) => {
 };
 
 // ============================================
-// 1. Get Available Slots for a Doctor on a Specific Date
+// 1. Get Available Slots for a Doctor
 // ============================================
 export const getAvailableSlots = async (req, res) => {
   try {
@@ -37,8 +37,7 @@ export const getAvailableSlots = async (req, res) => {
       });
     }
 
-    // Get doctor details
-    const doctor = await User.findById(doctorId);
+    const doctor = await userModel.findById(doctorId).lean().exec();
     if (!doctor || doctor.role !== 1) {
       return res.status(404).json({
         success: false,
@@ -46,12 +45,17 @@ export const getAvailableSlots = async (req, res) => {
       });
     }
 
-    // Get day name from date
+    if (doctor.verificationStatus !== "approved") {
+      return res.status(400).json({
+        success: false,
+        message: "This doctor is not currently accepting appointments",
+      });
+    }
+
     const dayName = new Date(date)
       .toLocaleDateString("en-US", { weekday: "long" })
       .toLowerCase();
 
-    // Get doctor's schedule for that day
     const daySchedule = doctor.schedule?.schedule?.[dayName];
 
     if (!daySchedule || !daySchedule.isAvailable) {
@@ -65,7 +69,6 @@ export const getAvailableSlots = async (req, res) => {
       });
     }
 
-    // Generate all possible slots
     const duration = parseInt(doctor.settings?.appointmentDuration || 30);
     const allSlots = [];
 
@@ -93,22 +96,23 @@ export const getAvailableSlots = async (req, res) => {
       }
     });
 
-    // Get booked appointments for this date
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const bookedAppointments = await Appointment.find({
-      doctorId,
-      appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-      status: { $in: ["scheduled", "confirmed"] },
-    });
+    const bookedAppointments = await appointmentModel
+      .find({
+        doctorId,
+        appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+        status: { $in: ["scheduled", "confirmed", "follow-up"] },
+      })
+      .select("appointmentTime24")
+      .lean()
+      .exec();
 
-    // Get booked time slots
     const bookedSlots = bookedAppointments.map((apt) => apt.appointmentTime24);
 
-    // Filter available slots
     const availableSlots = allSlots
       .filter((slot) => !bookedSlots.includes(slot))
       .map((slot) => {
@@ -126,6 +130,8 @@ export const getAvailableSlots = async (req, res) => {
       success: true,
       data: {
         date,
+        doctorName: doctor.name,
+        specialization: doctor.specialization,
         totalSlots: allSlots.length,
         bookedSlots: bookedSlots.length,
         availableSlots: availableSlots.length,
@@ -143,7 +149,7 @@ export const getAvailableSlots = async (req, res) => {
 };
 
 // ============================================
-// 2. Create New Appointment
+// 2. Create New Appointment (Patient Only)
 // ============================================
 export const createAppointment = async (req, res) => {
   try {
@@ -154,10 +160,9 @@ export const createAppointment = async (req, res) => {
       appointmentTime24,
       service,
       patientNotes,
-      patientInfo, // { name, phone, email }
+      patientInfo,
     } = req.body;
 
-    // Validation
     if (
       !doctorId ||
       !appointmentDate ||
@@ -178,7 +183,6 @@ export const createAppointment = async (req, res) => {
       });
     }
 
-    // Check if user is logged in
     if (!req.user?._id) {
       return res.status(401).json({
         success: false,
@@ -188,8 +192,7 @@ export const createAppointment = async (req, res) => {
 
     const patientId = req.user._id;
 
-    // Check profile completion
-    const patient = await User.findById(patientId);
+    const patient = await userModel.findById(patientId);
     if (!patient) {
       return res.status(404).json({
         success: false,
@@ -206,8 +209,7 @@ export const createAppointment = async (req, res) => {
       });
     }
 
-    // Get doctor details
-    const doctor = await User.findById(doctorId);
+    const doctor = await userModel.findById(doctorId);
     if (!doctor || doctor.role !== 1) {
       return res.status(404).json({
         success: false,
@@ -215,17 +217,16 @@ export const createAppointment = async (req, res) => {
       });
     }
 
-    // Check if slot is still available
     const startOfDay = new Date(appointmentDate);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(appointmentDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const existingAppointment = await Appointment.findOne({
+    const existingAppointment = await appointmentModel.findOne({
       doctorId,
       appointmentDate: { $gte: startOfDay, $lte: endOfDay },
       appointmentTime24,
-      status: { $in: ["scheduled", "confirmed"] },
+      status: { $in: ["scheduled", "confirmed", "follow-up"] },
     });
 
     if (existingAppointment) {
@@ -235,13 +236,13 @@ export const createAppointment = async (req, res) => {
       });
     }
 
-    // Create appointment with new schema
-    const appointment = new Appointment({
+    const appointment = new appointmentModel({
       patientId,
       patientInfo: {
         name: patientInfo.name,
         email: patientInfo.email || patient.email || "",
         phone: patientInfo.phone,
+        profileImage: patient.profileImage || "",
       },
       doctorId,
       doctorName: doctor.name,
@@ -253,15 +254,11 @@ export const createAppointment = async (req, res) => {
       service,
       patientNotes: patientNotes || "",
       status: "scheduled",
-
-      // Payment details
       payment: {
         consultationFee: parseInt(doctor.settings?.consultationFee || 500),
         paymentMethod: "cash",
         paymentStatus: "pending",
       },
-
-      // Audit log entry
       auditLog: [
         {
           action: "created",
@@ -272,8 +269,6 @@ export const createAppointment = async (req, res) => {
     });
 
     await appointment.save();
-
-    // Populate doctor info for response
     await appointment.populate(
       "doctorId",
       "name profileImage specialization phone"
@@ -308,32 +303,45 @@ export const createAppointment = async (req, res) => {
 // ============================================
 export const getPatientAppointments = async (req, res) => {
   try {
+    if (!req.user?._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Please login to view appointments",
+      });
+    }
+
     const patientId = req.user._id;
     const { status } = req.query;
 
     const query = { patientId };
-    if (status) {
+    if (status && status !== "all") {
       query.status = status;
     }
 
-    const appointments = await Appointment.find(query)
+    const appointments = await appointmentModel
+      .find(query)
       .populate("doctorId", "name profileImage specialization phone email")
-      .sort({ appointmentDate: -1, appointmentTime24: -1 });
+      .sort({ appointmentDate: -1, appointmentTime24: -1 })
+      .lean()
+      .exec();
 
-    // Add payment summary
     const paymentSummary = {
       total: appointments.length,
-      pending: appointments.filter((a) => a.payment.paymentStatus === "pending")
-        .length,
-      paid: appointments.filter((a) => a.payment.paymentStatus === "paid")
-        .length,
+      scheduled: appointments.filter((a) => a.status === "scheduled").length,
+      confirmed: appointments.filter((a) => a.status === "confirmed").length,
+      completed: appointments.filter((a) => a.status === "completed").length,
+      followUp: appointments.filter((a) => a.status === "follow-up").length,
+      cancelled: appointments.filter((a) => a.status === "cancelled").length,
       totalAmount: appointments.reduce(
-        (sum, a) => sum + a.payment.consultationFee,
+        (sum, a) => sum + (a.payment?.consultationFee || 0),
         0
       ),
       paidAmount: appointments
-        .filter((a) => a.payment.paymentStatus === "paid")
-        .reduce((sum, a) => sum + a.payment.paidAmount, 0),
+        .filter((a) => a.payment?.paymentStatus === "paid")
+        .reduce((sum, a) => sum + (a.payment?.paidAmount || 0), 0),
+      pendingAmount: appointments
+        .filter((a) => a.payment?.paymentStatus === "pending")
+        .reduce((sum, a) => sum + (a.payment?.consultationFee || 0), 0),
     };
 
     res.status(200).json({
@@ -346,7 +354,7 @@ export const getPatientAppointments = async (req, res) => {
     console.error("Error in getPatientAppointments:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to fetch appointments",
       error: error.message,
     });
   }
@@ -355,6 +363,68 @@ export const getPatientAppointments = async (req, res) => {
 // ============================================
 // 4. Get Doctor's Appointments
 // ============================================
+// export const getDoctorAppointments = async (req, res) => {
+//   try {
+//     const doctorId = req.user._id;
+//     const { status, date } = req.query;
+
+//     const query = { doctorId };
+
+//     if (status && status !== "all") {
+//       query.status = status;
+//     }
+
+//     if (date) {
+//       const startOfDay = new Date(date);
+//       startOfDay.setHours(0, 0, 0, 0);
+//       const endOfDay = new Date(date);
+//       endOfDay.setHours(23, 59, 59, 999);
+//       query.appointmentDate = { $gte: startOfDay, $lte: endOfDay };
+//     }
+
+//     const appointments = await appointmentModel
+//       .find(query)
+//       .populate("patientId", "name profileImage phone email bloodGroup")
+//       .sort({ appointmentDate: 1, appointmentTime24: 1 });
+
+//     const paymentSummary = {
+//       total: appointments.length,
+//       scheduled: appointments.filter((a) => a.status === "scheduled").length,
+//       confirmed: appointments.filter((a) => a.status === "confirmed").length,
+//       completed: appointments.filter((a) => a.status === "completed").length,
+//       followUp: appointments.filter((a) => a.status === "follow-up").length,
+//       noShow: appointments.filter((a) => a.status === "no-show").length,
+//       paymentPending: appointments.filter(
+//         (a) => a.status === "completed" && a.payment.paymentStatus === "pending"
+//       ).length,
+//       paid: appointments.filter((a) => a.payment.paymentStatus === "paid")
+//         .length,
+//       totalRevenue: appointments
+//         .filter((a) => a.payment.paymentStatus === "paid")
+//         .reduce((sum, a) => sum + a.payment.paidAmount, 0),
+//       pendingAmount: appointments
+//         .filter(
+//           (a) =>
+//             a.status === "completed" && a.payment.paymentStatus === "pending"
+//         )
+//         .reduce((sum, a) => sum + a.payment.consultationFee, 0),
+//     };
+
+//     res.status(200).json({
+//       success: true,
+//       count: appointments.length,
+//       data: appointments,
+//       paymentSummary,
+//     });
+//   } catch (error) {
+//     console.error("Error in getDoctorAppointments:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: error.message,
+//     });
+//   }
+// };
 export const getDoctorAppointments = async (req, res) => {
   try {
     const doctorId = req.user._id;
@@ -362,7 +432,7 @@ export const getDoctorAppointments = async (req, res) => {
 
     const query = { doctorId };
 
-    if (status) {
+    if (status && status !== "all") {
       query.status = status;
     }
 
@@ -374,14 +444,40 @@ export const getDoctorAppointments = async (req, res) => {
       query.appointmentDate = { $gte: startOfDay, $lte: endOfDay };
     }
 
-    const appointments = await Appointment.find(query)
-      .populate("patientId", "name profileImage phone email")
-      .sort({ appointmentDate: 1, appointmentTime24: 1 });
+    const appointments = await appointmentModel
+      .find(query)
+      .populate("patientId", "name profileImage phone email bloodGroup")
+      .sort({ appointmentDate: 1, appointmentTime24: 1 })
+      .lean(); // ✅ lean() add koren to modify easily
 
-    // Payment summary for doctor
+    // ✅ Get all appointment IDs
+    const appointmentIds = appointments.map((apt) => apt._id);
+
+    // ✅ Fetch all prescriptions for these appointments
+    const prescriptions = await prescriptionModel
+      .find({ appointmentId: { $in: appointmentIds } })
+      .select("_id prescriptionId status createdAt nextVisit appointmentId")
+      .lean();
+
+    // ✅ Create a map for quick lookup
+    const prescriptionMap = {};
+    prescriptions.forEach((prescription) => {
+      prescriptionMap[prescription.appointmentId.toString()] = prescription;
+    });
+
+    // ✅ Add prescription to each appointment
+    const appointmentsWithPrescription = appointments.map((appointment) => ({
+      ...appointment,
+      prescription: prescriptionMap[appointment._id.toString()] || null,
+    }));
+
     const paymentSummary = {
       total: appointments.length,
+      scheduled: appointments.filter((a) => a.status === "scheduled").length,
+      confirmed: appointments.filter((a) => a.status === "confirmed").length,
       completed: appointments.filter((a) => a.status === "completed").length,
+      followUp: appointments.filter((a) => a.status === "follow-up").length,
+      noShow: appointments.filter((a) => a.status === "no-show").length,
       paymentPending: appointments.filter(
         (a) => a.status === "completed" && a.payment.paymentStatus === "pending"
       ).length,
@@ -400,8 +496,8 @@ export const getDoctorAppointments = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      count: appointments.length,
-      data: appointments,
+      count: appointmentsWithPrescription.length,
+      data: appointmentsWithPrescription, // ✅ Updated data with prescriptions
       paymentSummary,
     });
   } catch (error) {
@@ -415,16 +511,112 @@ export const getDoctorAppointments = async (req, res) => {
 };
 
 // ============================================
-// 5. Get Single Appointment Details
+// 5. Get Archived Appointments (Doctor Only)
 // ============================================
+export const getArchivedAppointments = async (req, res) => {
+  try {
+    const doctorId = req.user._id;
+
+    // Get archived and no-show appointments
+    const appointments = await appointmentModel
+      .find({
+        doctorId,
+        status: { $in: ["archived", "no-show"] },
+      })
+      .populate("patientId", "name profileImage phone email bloodGroup")
+      .sort({ appointmentDate: -1, appointmentTime24: -1 })
+      .lean()
+      .exec();
+
+    const summary = {
+      total: appointments.length,
+      archived: appointments.filter((a) => a.status === "archived").length,
+      noShow: appointments.filter((a) => a.status === "no-show").length,
+    };
+
+    res.status(200).json({
+      success: true,
+      count: appointments.length,
+      data: appointments,
+      summary,
+    });
+  } catch (error) {
+    console.error("Error in getArchivedAppointments:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch archived appointments",
+      error: error.message,
+    });
+  }
+};
+
+// ============================================
+// 6. Get Single Appointment Details
+// ============================================
+// export const getAppointmentDetails = async (req, res) => {
+//   try {
+//     const { appointmentId } = req.params;
+//     const userId = req.user._id;
+
+//     const appointment = await appointmentModel
+//       .findById(appointmentId)
+//       .populate(
+//         "patientId",
+//         "name profileImage phone email bloodGroup dateOfBirth address allergies chronicConditions currentMedications"
+//       )
+//       .populate("doctorId", "name profileImage specialization phone email")
+//       .populate("previousAppointmentId", "appointmentDate status doctorNotes")
+//       .populate("prescription")
+//       .lean()
+//       .exec();
+
+//     if (!appointment) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Appointment not found",
+//       });
+//     }
+
+//     const isPatient =
+//       appointment.patientId._id.toString() === userId.toString();
+//     const isDoctor = appointment.doctorId._id.toString() === userId.toString();
+//     const isAdmin = req.user.role === 2;
+
+//     if (!isPatient && !isDoctor && !isAdmin) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Not authorized to view this appointment",
+//       });
+//     }
+
+//     res.status(200).json({
+//       success: true,
+//       data: appointment,
+//     });
+//   } catch (error) {
+//     console.error("Error in getAppointmentDetails:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch appointment details",
+//       error: error.message,
+//     });
+//   }
+// };
 export const getAppointmentDetails = async (req, res) => {
   try {
     const { appointmentId } = req.params;
     const userId = req.user._id;
 
-    const appointment = await Appointment.findById(appointmentId)
-      .populate("patientId", "name profileImage phone email")
-      .populate("doctorId", "name profileImage specialization phone email");
+    const appointment = await appointmentModel
+      .findById(appointmentId)
+      .populate(
+        "patientId",
+        "name profileImage phone email bloodGroup dateOfBirth address allergies chronicConditions currentMedications"
+      )
+      .populate("doctorId", "name profileImage specialization phone email")
+      .populate("previousAppointmentId", "appointmentDate status doctorNotes")
+      .lean()
+      .exec();
 
     if (!appointment) {
       return res.status(404).json({
@@ -433,17 +625,26 @@ export const getAppointmentDetails = async (req, res) => {
       });
     }
 
-    // Check authorization
     const isPatient =
       appointment.patientId._id.toString() === userId.toString();
     const isDoctor = appointment.doctorId._id.toString() === userId.toString();
+    const isAdmin = req.user.role === 2;
 
-    if (!isPatient && !isDoctor && req.user.role !== 2) {
+    if (!isPatient && !isDoctor && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to view this appointment",
       });
     }
+
+    // ✅ Check if prescription exists for this appointment
+    const prescription = await prescriptionModel
+      .findOne({ appointmentId: appointmentId })
+      .select("_id prescriptionId status createdAt nextVisit")
+      .lean();
+
+    // ✅ Add prescription to appointment object
+    appointment.prescription = prescription;
 
     res.status(200).json({
       success: true,
@@ -453,22 +654,79 @@ export const getAppointmentDetails = async (req, res) => {
     console.error("Error in getAppointmentDetails:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to fetch appointment details",
+      error: error.message,
+    });
+  }
+};
+// ============================================
+// 7. Confirm Appointment (Doctor Only)
+// ============================================
+export const confirmAppointment = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    const doctorId = req.user._id;
+
+    const appointment = await appointmentModel.findOne({
+      _id: appointmentId,
+      doctorId,
+    });
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found",
+      });
+    }
+
+    if (appointment.status !== "scheduled") {
+      return res.status(400).json({
+        success: false,
+        message: "Only scheduled appointments can be confirmed",
+      });
+    }
+
+    appointment.status = "confirmed";
+    appointment.auditLog.push({
+      action: "confirmed",
+      performedBy: doctorId,
+      note: "Appointment confirmed by doctor",
+    });
+
+    await appointment.save();
+    await appointment.populate("patientId", "name phone email");
+
+    res.status(200).json({
+      success: true,
+      message: "Appointment confirmed successfully",
+      data: appointment,
+    });
+  } catch (error) {
+    console.error("Error in confirmAppointment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to confirm appointment",
       error: error.message,
     });
   }
 };
 
 // ============================================
-// 6. Complete Appointment (Doctor Only)
+// 8. Complete Appointment (Doctor Only)
 // ============================================
 export const completeAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { doctorNotes } = req.body;
+    const {
+      doctorNotes,
+      createFollowUp,
+      followUpDate,
+      followUpTime,
+      followUpTime24,
+    } = req.body;
     const doctorId = req.user._id;
 
-    const appointment = await Appointment.findOne({
+    const appointment = await appointmentModel.findOne({
       _id: appointmentId,
       doctorId,
     });
@@ -494,28 +752,178 @@ export const completeAppointment = async (req, res) => {
       });
     }
 
-    // Use helper method from model
-    await appointment.completeAppointment(doctorId, doctorNotes);
+    // Update current appointment
+    appointment.status = "completed";
+    appointment.doctorNotes = doctorNotes || "";
+
+    appointment.auditLog.push({
+      action: "completed",
+      performedBy: doctorId,
+      note: "Appointment completed by doctor",
+    });
+
+    await appointment.save();
+
+    let followUpAppointment = null;
+
+    // Create follow-up appointment if requested
+    if (createFollowUp && followUpDate && followUpTime && followUpTime24) {
+      const doctor = await userModel.findById(doctorId);
+
+      followUpAppointment = new appointmentModel({
+        patientId: appointment.patientId,
+        patientInfo: appointment.patientInfo,
+        doctorId: appointment.doctorId,
+        doctorName: appointment.doctorName,
+        doctorSpecialization: appointment.doctorSpecialization,
+        appointmentDate: new Date(followUpDate),
+        appointmentTime: followUpTime,
+        appointmentTime24: followUpTime24,
+        duration: appointment.duration,
+        service: appointment.service,
+        status: "follow-up",
+        isFollowUp: true,
+        previousAppointmentId: appointment._id,
+        payment: {
+          consultationFee: parseInt(doctor.settings?.consultationFee || 500),
+          paymentMethod: "cash",
+          paymentStatus: "pending",
+        },
+        auditLog: [
+          {
+            action: "created",
+            performedBy: doctorId,
+            note: "Follow-up appointment created by doctor",
+          },
+        ],
+      });
+
+      await followUpAppointment.save();
+
+      // Update original appointment with follow-up reference
+      appointment.nextAppointmentDate = new Date(followUpDate);
+      await appointment.save();
+    }
 
     await appointment.populate("patientId", "name phone email");
 
     res.status(200).json({
       success: true,
-      message: "Appointment marked as completed",
-      data: appointment,
+      message: followUpAppointment
+        ? "Appointment completed and follow-up scheduled"
+        : "Appointment marked as completed",
+      data: {
+        appointment,
+        followUpAppointment,
+      },
     });
   } catch (error) {
     console.error("Error in completeAppointment:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to complete appointment",
       error: error.message,
     });
   }
 };
 
 // ============================================
-// 7. Mark Payment as Received (Doctor Only)
+// 9. Mark as No-Show (Doctor Only)
+// ============================================
+export const markAsNoShow = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    const { reason } = req.body;
+    const doctorId = req.user._id;
+
+    const appointment = await appointmentModel.findOne({
+      _id: appointmentId,
+      doctorId,
+    });
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found",
+      });
+    }
+
+    if (appointment.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only confirmed appointments can be marked as no-show",
+      });
+    }
+
+    appointment.status = "no-show";
+    appointment.cancellationReason = reason || "Patient did not show up";
+    appointment.auditLog.push({
+      action: "no-show",
+      performedBy: doctorId,
+      note: reason || "Patient did not show up",
+    });
+
+    await appointment.save();
+    await appointment.populate("patientId", "name phone email");
+
+    res.status(200).json({
+      success: true,
+      message: "Appointment marked as no-show",
+      data: appointment,
+    });
+  } catch (error) {
+    console.error("Error in markAsNoShow:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark as no-show",
+      error: error.message,
+    });
+  }
+};
+
+// ============================================
+// 10. Archive Expired Appointments (Cron Job / Manual)
+// ============================================
+export const archiveExpiredAppointments = async (req, res) => {
+  try {
+    const now = new Date();
+
+    // Find all scheduled appointments with expired dates
+    const expiredAppointments = await appointmentModel.find({
+      status: "scheduled",
+      appointmentDate: { $lt: now },
+    });
+
+    let archivedCount = 0;
+
+    for (const appointment of expiredAppointments) {
+      appointment.status = "archived";
+      appointment.auditLog.push({
+        action: "archived",
+        performedBy: req.user?._id || appointment.doctorId,
+        note: "Automatically archived - appointment date expired",
+      });
+      await appointment.save();
+      archivedCount++;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${archivedCount} expired appointments archived`,
+      archivedCount,
+    });
+  } catch (error) {
+    console.error("Error in archiveExpiredAppointments:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to archive expired appointments",
+      error: error.message,
+    });
+  }
+};
+
+// ============================================
+// 11. Mark Payment as Received (Doctor Only)
 // ============================================
 export const markPaymentReceived = async (req, res) => {
   try {
@@ -523,7 +931,7 @@ export const markPaymentReceived = async (req, res) => {
     const { amount, note } = req.body;
     const doctorId = req.user._id;
 
-    const appointment = await Appointment.findOne({
+    const appointment = await appointmentModel.findOne({
       _id: appointmentId,
       doctorId,
     });
@@ -542,7 +950,6 @@ export const markPaymentReceived = async (req, res) => {
       });
     }
 
-    // Use helper method from model
     await appointment.markAsPaid(
       doctorId,
       amount || appointment.payment.consultationFee,
@@ -560,14 +967,14 @@ export const markPaymentReceived = async (req, res) => {
     console.error("Error in markPaymentReceived:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to mark payment",
       error: error.message,
     });
   }
 };
 
 // ============================================
-// 8. Cancel Appointment
+// 12. Cancel Appointment (Patient Only)
 // ============================================
 export const cancelAppointment = async (req, res) => {
   try {
@@ -582,7 +989,7 @@ export const cancelAppointment = async (req, res) => {
       });
     }
 
-    const appointment = await Appointment.findById(appointmentId);
+    const appointment = await appointmentModel.findById(appointmentId);
 
     if (!appointment) {
       return res.status(404).json({
@@ -591,14 +998,13 @@ export const cancelAppointment = async (req, res) => {
       });
     }
 
-    // Check authorization
+    // Only patient can cancel
     const isPatient = appointment.patientId.toString() === userId.toString();
-    const isDoctor = appointment.doctorId.toString() === userId.toString();
 
-    if (!isPatient && !isDoctor) {
+    if (!isPatient) {
       return res.status(403).json({
         success: false,
-        message: "Not authorized to cancel this appointment",
+        message: "Only patients can cancel appointments",
       });
     }
 
@@ -616,10 +1022,7 @@ export const cancelAppointment = async (req, res) => {
       });
     }
 
-    const cancelledBy = isPatient ? "patient" : "doctor";
-
-    // Use helper method from model
-    await appointment.cancelAppointment(userId, reason, cancelledBy);
+    await appointment.cancelAppointment(userId, reason, "patient");
 
     await appointment.populate("patientId", "name phone email");
     await appointment.populate("doctorId", "name phone email");
@@ -633,22 +1036,25 @@ export const cancelAppointment = async (req, res) => {
     console.error("Error in cancelAppointment:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to cancel appointment",
       error: error.message,
     });
   }
 };
 
 // ============================================
-// 9. Update Appointment Status (Legacy - for backward compatibility)
+// 13. Delete Appointment (Doctor/Admin Only)
 // ============================================
-export const updateAppointmentStatus = async (req, res) => {
+export const deleteAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { status, cancellationReason, doctorNotes } = req.body;
     const userId = req.user._id;
 
-    const appointment = await Appointment.findById(appointmentId);
+    const appointment = await appointmentModel
+      .findById(appointmentId)
+      .select("patientId doctorId status appointmentDate appointmentTime")
+      .lean()
+      .exec();
 
     if (!appointment) {
       return res.status(404).json({
@@ -657,51 +1063,250 @@ export const updateAppointmentStatus = async (req, res) => {
       });
     }
 
-    // Check authorization
-    const isPatient = appointment.patientId.toString() === userId.toString();
     const isDoctor = appointment.doctorId.toString() === userId.toString();
+    const isAdmin = req.user.role === 2;
 
-    if (!isPatient && !isDoctor && req.user.role !== 2) {
+    if (!isDoctor && !isAdmin) {
       return res.status(403).json({
         success: false,
-        message: "Not authorized to update this appointment",
+        message: "Not authorized to delete this appointment",
       });
     }
 
-    // Handle different status updates
-    if (status === "cancelled") {
-      const cancelledBy = isPatient
-        ? "patient"
-        : req.user.role === 2
-        ? "admin"
-        : "doctor";
-      await appointment.cancelAppointment(
-        userId,
-        cancellationReason || "No reason provided",
-        cancelledBy
-      );
-    } else if (status === "completed" && isDoctor) {
-      await appointment.completeAppointment(userId, doctorNotes);
-    } else {
-      appointment.status = status;
-      appointment.auditLog.push({
-        action: status,
-        performedBy: userId,
-        note: `Status updated to ${status}`,
+    if (
+      appointment.status !== "cancelled" &&
+      appointment.status !== "completed" &&
+      appointment.status !== "archived" &&
+      appointment.status !== "no-show"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only cancelled, completed, archived, or no-show appointments can be deleted",
       });
-      await appointment.save();
     }
 
-    await appointment.populate("patientId", "name phone email");
-    await appointment.populate("doctorId", "name phone email");
+    await appointmentModel.findByIdAndDelete(appointmentId);
 
     res.status(200).json({
       success: true,
-      message: `Appointment ${status} successfully`,
-      data: appointment,
+      message: "Appointment deleted successfully",
     });
   } catch (error) {
-    console.error("Error in updateAppointmentStatus:", error);
+    console.error("Error in deleteAppointment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete appointment",
+      error: error.message,
+    });
+  }
+};
+
+// ==================== GET ALL APPOINTMENTS (ADMIN) ====================
+export const getAllAppointments = async (req, res) => {
+  try {
+    const { status, date, startDate, endDate, doctorId, patientId } = req.query;
+
+    const query = {};
+
+    // Status filter
+    if (status && status !== "all") {
+      query.status = status;
+    }
+
+    // Specific date filter
+    if (date) {
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      query.appointmentDate = { $gte: startOfDay, $lte: endOfDay };
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      query.appointmentDate = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        query.appointmentDate.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.appointmentDate.$lte = end;
+      }
+    }
+
+    // Filter by doctor
+    if (doctorId && doctorId !== "all") {
+      query.doctorId = doctorId;
+    }
+
+    // Filter by patient
+    if (patientId && patientId !== "all") {
+      query.patientId = patientId;
+    }
+
+    const appointments = await appointmentModel
+      .find(query)
+      .populate("patientId", "name profileImage phone email bloodGroup")
+      .populate("doctorId", "name profileImage specialization department")
+      .sort({ appointmentDate: -1, appointmentTime24: -1 })
+      .lean();
+
+    // ✅ Get all appointment IDs
+    const appointmentIds = appointments.map((apt) => apt._id);
+
+    // ✅ Fetch all prescriptions for these appointments
+    const prescriptions = await prescriptionModel
+      .find({ appointmentId: { $in: appointmentIds } })
+      .select("_id prescriptionId status createdAt nextVisit appointmentId")
+      .lean();
+
+    // ✅ Create a map for quick lookup
+    const prescriptionMap = {};
+    prescriptions.forEach((prescription) => {
+      prescriptionMap[prescription.appointmentId.toString()] = prescription;
+    });
+
+    // ✅ Add prescription to each appointment
+    const appointmentsWithPrescription = appointments.map((appointment) => ({
+      ...appointment,
+      prescription: prescriptionMap[appointment._id.toString()] || null,
+    }));
+
+    // ✅ Statistics Summary
+    const statistics = {
+      total: appointments.length,
+      scheduled: appointments.filter((a) => a.status === "scheduled").length,
+      confirmed: appointments.filter((a) => a.status === "confirmed").length,
+      completed: appointments.filter((a) => a.status === "completed").length,
+      cancelled: appointments.filter((a) => a.status === "cancelled").length,
+      archived: appointments.filter((a) => a.status === "archived").length,
+      followUp: appointments.filter((a) => a.status === "follow-up").length,
+      noShow: appointments.filter((a) => a.status === "no-show").length,
+
+      // Payment Statistics
+      totalRevenue: appointments
+        .filter((a) => a.payment.paymentStatus === "paid")
+        .reduce((sum, a) => sum + a.payment.paidAmount, 0),
+      pendingAmount: appointments
+        .filter((a) => a.payment.paymentStatus === "pending")
+        .reduce((sum, a) => sum + a.payment.consultationFee, 0),
+      paid: appointments.filter((a) => a.payment.paymentStatus === "paid")
+        .length,
+      paymentPending: appointments.filter(
+        (a) => a.payment.paymentStatus === "pending"
+      ).length,
+    };
+
+    res.status(200).json({
+      success: true,
+      count: appointmentsWithPrescription.length,
+      data: appointmentsWithPrescription,
+      statistics,
+    });
+  } catch (error) {
+    console.error("Error in getAllAppointments:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// ==================== DELETE ARCHIVED APPOINTMENT (ADMIN ONLY) ====================
+export const deleteArchivedAppointment = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+
+    // ✅ Find appointment
+    const appointment = await appointmentModel.findById(appointmentId);
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment not found",
+      });
+    }
+
+    // ✅ Check if appointment is archived
+    if (appointment.status !== "archived") {
+      return res.status(400).json({
+        success: false,
+        message: "Only archived appointments can be deleted",
+        currentStatus: appointment.status,
+      });
+    }
+
+    // ✅ Delete associated prescriptions (if any)
+    await prescriptionModel.deleteMany({ appointmentId: appointment._id });
+
+    // ✅ Delete appointment
+    await appointmentModel.findByIdAndDelete(appointmentId);
+
+    res.status(200).json({
+      success: true,
+      message: "Archived appointment and related data deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error in deleteArchivedAppointment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// ==================== BULK DELETE ARCHIVED APPOINTMENTS (ADMIN) ====================
+export const bulkDeleteArchivedAppointments = async (req, res) => {
+  try {
+    const { appointmentIds } = req.body;
+
+    if (
+      !appointmentIds ||
+      !Array.isArray(appointmentIds) ||
+      appointmentIds.length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide an array of appointment IDs",
+      });
+    }
+
+    // ✅ Find all archived appointments
+    const appointments = await appointmentModel.find({
+      _id: { $in: appointmentIds },
+      status: "archived",
+    });
+
+    if (appointments.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No archived appointments found with provided IDs",
+      });
+    }
+
+    const archivedIds = appointments.map((apt) => apt._id);
+
+    // ✅ Delete associated prescriptions
+    await prescriptionModel.deleteMany({ appointmentId: { $in: archivedIds } });
+
+    // ✅ Delete appointments
+    const deleteResult = await appointmentModel.deleteMany({
+      _id: { $in: archivedIds },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `${deleteResult.deletedCount} archived appointments deleted successfully`,
+      deletedCount: deleteResult.deletedCount,
+    });
+  } catch (error) {
+    console.error("Error in bulkDeleteArchivedAppointments:", error);
     res.status(500).json({
       success: false,
       message: "Server error",

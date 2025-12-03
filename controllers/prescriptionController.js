@@ -98,6 +98,14 @@ export const getPrescriptionsByPatient = async (req, res) => {
   try {
     const { patientId } = req.params;
 
+    // ✅ Validate patientId
+    if (!patientId || patientId === "undefined" || patientId === "null") {
+      return res.status(400).json({
+        success: false,
+        message: "Valid patient ID is required",
+      });
+    }
+
     // Check authorization
     if (req.user.role === 0 && req.user._id.toString() !== patientId) {
       return res.status(403).json({
@@ -110,12 +118,33 @@ export const getPrescriptionsByPatient = async (req, res) => {
       .populate("patientId", "name email phone bloodGroup")
       .populate("doctorId", "name specialization profileImage")
       .populate("appointmentId", "bookingId appointmentDate appointmentTime")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean(); // ✅ .lean() add করুন - এটা plain JavaScript object return করবে
+
+    // ✅ Transform data - populate failed হলে fallback use করুন
+    const transformedPrescriptions = prescriptions.map((prescription) => {
+      return {
+        ...prescription,
+        // Populate না থাকলে original field use করুন
+        patientName:
+          prescription.patientId?.name ||
+          prescription.patientName ||
+          "Unknown Patient",
+        doctorName:
+          prescription.doctorId?.name ||
+          prescription.doctorName ||
+          "Unknown Doctor",
+        doctorSpecialization:
+          prescription.doctorId?.specialization ||
+          prescription.doctorSpecialization ||
+          "N/A",
+      };
+    });
 
     res.status(200).json({
       success: true,
-      count: prescriptions.length,
-      data: prescriptions,
+      count: transformedPrescriptions.length,
+      data: transformedPrescriptions,
     });
   } catch (error) {
     console.error("Get prescriptions by patient error:", error);

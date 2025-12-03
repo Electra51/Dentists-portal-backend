@@ -1,29 +1,3 @@
-// // routes/appointmentRoutes.js
-// import express from "express";
-// import {
-//   getAvailableSlots,
-//   createAppointment,
-//   getPatientAppointments,
-//   getDoctorAppointments,
-//   updateAppointmentStatus,
-//   getAppointmentDetails,
-// } from "../controllers/appointmentController.js";
-// import { requireSignIn } from "../middlewares/authMiddleware.js";
-
-// const router = express.Router();
-
-// // Public routes
-// router.get("/available-slots", getAvailableSlots); // GET /api/appointments/available-slots?doctorId=xxx&date=2025-11-23
-
-// // Protected routes
-// router.post("/create", requireSignIn, createAppointment); // POST /api/appointments/create
-// router.get("/patient", requireSignIn, getPatientAppointments); // GET /api/appointments/patient
-// router.get("/doctor", requireSignIn, getDoctorAppointments); // GET /api/appointments/doctor
-// router.get("/:appointmentId", requireSignIn, getAppointmentDetails); // GET /api/appointments/:id
-// router.patch("/:appointmentId/status", requireSignIn, updateAppointmentStatus); // PATCH /api/appointments/:id/status
-
-// export default router;
-
 // routes/appointmentRoutes.js
 import express from "express";
 import {
@@ -31,31 +5,84 @@ import {
   createAppointment,
   getPatientAppointments,
   getDoctorAppointments,
+  getArchivedAppointments,
   getAppointmentDetails,
+  confirmAppointment,
   completeAppointment,
+  markAsNoShow,
+  archiveExpiredAppointments,
   markPaymentReceived,
   cancelAppointment,
-  updateAppointmentStatus,
+  deleteAppointment,
+  getAllAppointments,
+  deleteArchivedAppointment,
 } from "../controllers/appointmentController.js";
-import { isDoctor, requireSignIn } from "../middlewares/authMiddleware.js";
+import {
+  isDoctor,
+  isPatient,
+  requireSignIn,
+} from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
-// Public
-router.get("/available-slots", getAvailableSlots);
+// ============================================
+// PUBLIC ROUTES
+// ============================================
+// Get available slots for a doctor (anyone can check)
+router.get("/slots", getAvailableSlots);
 
-// Protected - Patient
-router.post("/create", requireSignIn, createAppointment);
-router.get("/patient", requireSignIn, getPatientAppointments);
+// ============================================
+// PATIENT ROUTES
+// ============================================
+// Create appointment (patient only)
+router.post("/create", requireSignIn, isPatient, createAppointment);
 
-// Protected - Doctor
-router.get("/doctor", requireSignIn, isDoctor, getDoctorAppointments);
+// Get patient's appointments
+router.get("/patient", requireSignIn, isPatient, getPatientAppointments);
+
+// Cancel appointment (patient only)
 router.patch(
-  "/:appointmentId/complete",
+  "/:appointmentId/cancel",
+  requireSignIn,
+  isPatient,
+  cancelAppointment
+);
+
+// ============================================
+// DOCTOR ROUTES
+// ============================================
+// Get doctor's appointments
+router.get("/doctor", requireSignIn, isDoctor, getDoctorAppointments);
+
+// Get archived appointments (doctor only)
+router.get(
+  "/doctor/archived",
+  requireSignIn,
+  isDoctor,
+  getArchivedAppointments
+);
+router.get("/admin-appointments", getAllAppointments);
+router.delete("/appointment/:appointmentId", deleteArchivedAppointment);
+// Confirm appointment (doctor only)
+router.patch(
+  "/:appointmentId/confirm",
+  requireSignIn,
+  isDoctor,
+  confirmAppointment
+);
+
+// Complete appointment (doctor only)
+router.patch(
+  "/:appointmentId/status",
   requireSignIn,
   isDoctor,
   completeAppointment
 );
+
+// Mark as no-show (doctor only)
+router.patch("/:appointmentId/no-show", requireSignIn, isDoctor, markAsNoShow);
+
+// Mark payment received (doctor only)
 router.patch(
   "/:appointmentId/mark-paid",
   requireSignIn,
@@ -63,9 +90,21 @@ router.patch(
   markPaymentReceived
 );
 
-// Protected - Both
+// Archive expired appointments (doctor/admin can trigger manually)
+router.post(
+  "/archive-expired",
+  requireSignIn,
+  isDoctor,
+  archiveExpiredAppointments
+);
+
+// Delete appointment (doctor only)
+router.delete("/:appointmentId", requireSignIn, isDoctor, deleteAppointment);
+
+// ============================================
+// SHARED ROUTES (Patient or Doctor)
+// ============================================
+// Get single appointment details
 router.get("/:appointmentId", requireSignIn, getAppointmentDetails);
-router.patch("/:appointmentId/cancel", requireSignIn, cancelAppointment);
-router.patch("/:appointmentId/status", requireSignIn, updateAppointmentStatus);
 
 export default router;

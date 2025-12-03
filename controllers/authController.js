@@ -1,6 +1,8 @@
 import { comparePassword, hashPassword } from "./../helpers/authHelper.js";
 import userModel from "../models/userModel.js";
 import JWT from "jsonwebtoken";
+import appointmentModel from "../models/appointmentModel.js";
+import prescriptionModel from "../models/prescriptionModel.js";
 
 export const registerController = async (req, res) => {
   try {
@@ -126,7 +128,24 @@ export const getUserProfileController = async (req, res) => {
       return res.status(400).send({ message: "Unauthorized" });
     }
 
-    const user = await userModel.findById(userId).select("-password");
+    const user = await userModel.findById(userId).select("-password").lean();
+
+    const latestAppointment = await appointmentModel
+      .findOne({ patientId: userId })
+      .sort({ appointmentDate: -1 })
+      .select("appointmentDate appointmentTime doctorId")
+      .populate("doctorId", "name profileImage specialization")
+      .lean();
+
+    const nextPrescriptionVisit = await prescriptionModel
+      .findOne({
+        patientId: userId,
+        nextVisit: { $ne: null },
+      })
+      .sort({ nextVisit: 1 })
+      .select("nextVisit doctorId")
+      .populate("doctorId", "name profileImage specialization")
+      .lean();
 
     if (!user) {
       return res.status(404).send({
@@ -138,6 +157,8 @@ export const getUserProfileController = async (req, res) => {
     res.status(200).send({
       success: true,
       user,
+      latestAppointment,
+      nextVisit: nextPrescriptionVisit || null,
     });
   } catch (error) {
     console.error(error);
