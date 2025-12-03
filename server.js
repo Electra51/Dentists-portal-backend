@@ -21,7 +21,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 //database
-connectDB();
+await connectDB();
 
 const app = express();
 
